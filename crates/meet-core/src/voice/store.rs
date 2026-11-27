@@ -21,10 +21,10 @@ pub struct VoiceStore {
     db: Connection,
 }
 
-fn to_blob(v: &[f32]) -> Vec<u8> {
+pub(crate) fn to_blob(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
-fn from_blob(b: &[u8]) -> Vec<f32> {
+pub(crate) fn from_blob(b: &[u8]) -> Vec<f32> {
     b.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
 }
 
