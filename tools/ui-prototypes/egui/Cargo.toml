@@ -1,0 +1,13 @@
+[package]
+name = "proto-egui"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[workspace]
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "default_fonts"] }
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
+panic = "abort"

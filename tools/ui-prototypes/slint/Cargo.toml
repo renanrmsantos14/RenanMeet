@@ -1,0 +1,15 @@
+[package]
+name = "proto-slint"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[workspace]
+[dependencies]
+slint = { version = "1.19", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-systemfonts"] }
+[build-dependencies]
+slint-build = "1.19"
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
+panic = "abort"

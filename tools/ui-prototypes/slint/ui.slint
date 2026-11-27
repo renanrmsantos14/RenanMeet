@@ -1,0 +1,20 @@
+import { Button, ListView, TextEdit, Slider, LineEdit } from "std-widgets.slint";
+export component App inherits Window {
+    title: "proto";
+    preferred-width: 900px; preferred-height: 600px;
+    in property <[string]> rows;
+    in-out property <float> pos: 0.3;
+    VerticalLayout {
+        padding: 12px; spacing: 8px;
+        LineEdit { placeholder-text: "Buscar"; }
+        Slider { value <=> root.pos; }
+        ListView {
+            for r[i] in rows : Rectangle {
+                height: 28px;
+                Text { text: r; vertical-alignment: center; }
+            }
+        }
+        TextEdit { height: 120px; text: "nota"; }
+        Button { text: "Gravar"; }
+    }
+}

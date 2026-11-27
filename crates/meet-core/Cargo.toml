@@ -1,0 +1,23 @@
+[package]
+name = "meet-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Núcleo do RenanMeet: captura, Opus, diarização, transcrição e ata"
+
+[dependencies]
+anyhow = "1"
+unsafe-libopus = "0.2"
+ogg = "0.9"
+dirs = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+hound = "3.5"
+
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
+
+[[bin]]
+name = "meetcli"
+path = "src/bin/meetcli.rs"
