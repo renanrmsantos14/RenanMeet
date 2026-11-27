@@ -16,8 +16,7 @@ rodar() { # grupo arquivo k flags...
   for f in online_4 online_4_s1 online_4_s2 online_4_s3; do rodar "online_k_conhecido" $f 4; rodar "online_auto" $f auto; done
   for f in sala_4 sala_4_s1 sala_4_s2 sala_4_s3; do
     rodar "canal_unico_k_conhecido" $f 4
-    rodar "canal_unico_k_conhecido_presencial" $f 4 --presencial
-    rodar "canal_unico_auto_presencial" $f auto --presencial
+    rodar "canal_unico_auto" $f auto
   done
 } | "$PY" -I -c '
 import sys,json,collections

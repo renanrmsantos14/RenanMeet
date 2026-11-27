@@ -1,6 +1,6 @@
 //! Reagrupamento das vozes por trecho: tira a impressão de cada trecho de fala, subtrai a
 //! média da gravação (remove o efeito comum de sala/microfone) e agrupa por ligação média.
-//! Pensado para o canal único (presencial), onde o clustering padrão do Sherpa confunde vozes.
+//! É o único clustering de verdade da análise; o Sherpa só entrega os trechos de fala.
 
 use anyhow::Result;
 
@@ -10,75 +10,63 @@ use super::embedding::{Extractor, SAMPLE_RATE};
 const MIN_ITEM: f64 = 0.8;
 const MAX_ITEM: f64 = 6.0;
 
-#[derive(Debug, Clone, Copy)]
-pub struct RefineOptions {
-    /// Número de participantes, se conhecido.
-    pub num_speakers: Option<usize>,
-    /// Sem número: junta grupos enquanto a distância média (1 − cosseno, após centralizar) ficar abaixo disso.
-    pub distance_threshold: f32,
-    /// Subtrai a impressão média da gravação.
-    pub center: bool,
-}
-
-impl Default for RefineOptions {
-    fn default() -> Self {
-        Self { num_speakers: None, distance_threshold: 0.75, center: true }
-    }
-}
-
 fn normalize(v: &mut [f32]) {
     let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
     v.iter_mut().for_each(|x| *x /= n);
 }
 
-fn dist(a: &[f32], b: &[f32]) -> f32 {
-    1.0 - a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>()
-}
-
-/// Agrupamento aglomerativo por ligação média. Devolve o rótulo (0..k) de cada vetor.
+/// Agrupamento aglomerativo por ligação média ponderada, com matriz de distâncias atualizada
+/// a cada fusão (O(n²) por passo). Devolve o rótulo (0..k) de cada vetor (já normalizados).
 pub fn agglomerate(vs: &[Vec<f32>], weights: &[f32], k: Option<usize>, threshold: f32) -> Vec<usize> {
     let n = vs.len();
-    let mut groups: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
-    let linkage = |a: &[usize], b: &[usize]| -> f32 {
-        let (mut s, mut w) = (0.0, 0.0);
-        for &i in a {
-            for &j in b {
-                let ww = weights[i] * weights[j];
-                s += dist(&vs[i], &vs[j]) * ww;
-                w += ww;
-            }
+    let mut d = vec![0f32; n * n];
+    for i in 0..n {
+        for j in i + 1..n {
+            let x = 1.0 - vs[i].iter().zip(&vs[j]).map(|(a, b)| a * b).sum::<f32>();
+            d[i * n + j] = x;
+            d[j * n + i] = x;
         }
-        s / w.max(1e-9)
-    };
-    loop {
-        if groups.len() <= 1 || k.is_some_and(|k| groups.len() <= k) {
-            break;
-        }
-        let (mut bi, mut bj, mut bd) = (0, 1, f32::MAX);
-        for i in 0..groups.len() {
-            for j in i + 1..groups.len() {
-                let d = linkage(&groups[i], &groups[j]);
-                if d < bd {
-                    (bi, bj, bd) = (i, j, d);
+    }
+    let mut w: Vec<f32> = weights.to_vec();
+    let mut alive: Vec<usize> = (0..n).collect();
+    let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    while alive.len() > 1 && !k.is_some_and(|k| alive.len() <= k) {
+        let (mut bi, mut bj, mut bd) = (0, 0, f32::MAX);
+        for (x, &i) in alive.iter().enumerate() {
+            for &j in &alive[x + 1..] {
+                if d[i * n + j] < bd {
+                    (bi, bj, bd) = (i, j, d[i * n + j]);
                 }
             }
         }
         if k.is_none() && bd > threshold {
             break;
         }
-        let g = groups.remove(bj);
-        groups[bi].extend(g);
+        // a distância média ponderada ao novo grupo é a média ponderada pelos pesos dos dois grupos
+        let (wa, wb) = (w[bi], w[bj]);
+        for &c in &alive {
+            if c != bi && c != bj {
+                let v = (wa * d[bi * n + c] + wb * d[bj * n + c]) / (wa + wb);
+                d[bi * n + c] = v;
+                d[c * n + bi] = v;
+            }
+        }
+        w[bi] = wa + wb;
+        let moved = std::mem::take(&mut members[bj]);
+        members[bi].extend(moved);
+        alive.retain(|&c| c != bj);
     }
     let mut lab = vec![0; n];
-    for (c, g) in groups.iter().enumerate() {
-        for &i in g {
-            lab[i] = c;
+    for (l, &g) in alive.iter().enumerate() {
+        for &i in &members[g] {
+            lab[i] = l;
         }
     }
     lab
 }
 
-pub fn refine(ex: &mut Extractor, pcm: &[f32], spans: &[Span], opt: RefineOptions) -> Result<Vec<Span>> {
+/// `num_speakers`: se conhecido; senão junta enquanto a distância média (1 − cosseno, centralizado) ficar abaixo de `distance`.
+pub fn refine(ex: &mut Extractor, pcm: &[f32], spans: &[Span], num_speakers: Option<usize>, distance: f32) -> Result<Vec<Span>> {
     // itens: trechos de até 6 s
     let mut items: Vec<(f64, f64)> = Vec::new();
     for s in spans {
@@ -109,24 +97,21 @@ pub fn refine(ex: &mut Extractor, pcm: &[f32], spans: &[Span], opt: RefineOption
     if embedded.len() < 2 {
         return Ok(spans.to_vec());
     }
-    if opt.center {
-        let dim = embedded[0].1.len();
-        let mut mean = vec![0f32; dim];
-        for (_, e) in &embedded {
-            mean.iter_mut().zip(e).for_each(|(m, x)| *m += x / embedded.len() as f32);
-        }
-        for (_, e) in embedded.iter_mut() {
-            e.iter_mut().zip(&mean).for_each(|(x, m)| *x -= m);
-            normalize(e);
-        }
+    let mut mean = vec![0f32; embedded[0].1.len()];
+    for (_, e) in &embedded {
+        mean.iter_mut().zip(e).for_each(|(m, x)| *m += x / embedded.len() as f32);
     }
-    let vs: Vec<Vec<f32>> = embedded.iter().map(|(_, e)| e.clone()).collect();
-    let w: Vec<f32> = embedded.iter().map(|(i, _)| (items[*i].1 - items[*i].0) as f32).collect();
-    let lab = agglomerate(&vs, &w, opt.num_speakers, opt.distance_threshold);
+    for (_, e) in embedded.iter_mut() {
+        e.iter_mut().zip(&mean).for_each(|(x, m)| *x -= m);
+        normalize(e);
+    }
+    let (idx, vs): (Vec<usize>, Vec<Vec<f32>>) = embedded.into_iter().unzip();
+    let w: Vec<f32> = idx.iter().map(|&i| (items[i].1 - items[i].0) as f32).collect();
+    let lab = agglomerate(&vs, &w, num_speakers, distance);
     // rótulo de cada item: o do embutido; itens curtos herdam o do vizinho mais próximo no tempo
     let mut label: Vec<Option<usize>> = vec![None; items.len()];
-    for ((i, _), l) in embedded.iter().zip(&lab) {
-        label[*i] = Some(*l);
+    for (&i, &l) in idx.iter().zip(&lab) {
+        label[i] = Some(l);
     }
     let known: Vec<usize> = (0..items.len()).filter(|i| label[*i].is_some()).collect();
     let mut out: Vec<Span> = Vec::new();

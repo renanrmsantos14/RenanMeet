@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use meet_core::audio::decode::{load_16k, write_wav_16k, Channel};
 use meet_core::audio::recorder::{Mode, Recorder, RecorderConfig};
 use meet_core::paths::db_path;
-use meet_core::voice::analyze::{analyze, enroll_embedding, AnalyzeOptions};
+use meet_core::voice::analyze::{analyze, enroll_embedding, AnalyzeOptions, Preproc};
 use meet_core::voice::sherpa::SherpaPaths;
 use meet_core::voice::store::VoiceStore;
 
@@ -61,21 +61,24 @@ fn main() -> Result<()> {
             println!("{} amostras ({:.1} s)", pcm.len(), pcm.len() as f64 / 16000.0);
         }
         Some("diarize") => {
-            // meetcli diarize <audio> [--speakers N] [--presencial] [--denoise] [--agc] [--sem-refinar] [--dist X] [--threshold X] [--voz-limiar X] [--saida arq.json]
+            // meetcli diarize <audio> [--speakers N] [--denoise] [--agc] [--sem-refinar] [--dist X] [--threshold X] [--voz-limiar X] [--saida arq.json]
             let pcm = load_16k(&PathBuf::from(&args[1]), Channel::Mix)?;
-            let opt = AnalyzeOptions {
-                num_speakers: flag(&args, "--speakers").and_then(|v| v.parse().ok()),
-                cluster_threshold: flag(&args, "--threshold").and_then(|v| v.parse().ok()).unwrap_or(0.90),
-                voice_threshold: flag(&args, "--voz-limiar").and_then(|v| v.parse().ok()).unwrap_or(0.5),
-                in_person: has(&args, "--presencial"),
-                denoise: has(&args, "--denoise"),
-                agc: has(&args, "--agc"),
-                refine: (!has(&args, "--sem-refinar")).then(|| meet_core::voice::refine::RefineOptions {
-                    num_speakers: None,
-                    distance_threshold: flag(&args, "--dist").and_then(|v| v.parse().ok()).unwrap_or(0.75),
-                    center: !has(&args, "--sem-centro"),
-                }),
-            };
+            let mut opt = AnalyzeOptions::default();
+            opt.num_speakers = flag(&args, "--speakers").and_then(|v| v.parse().ok());
+            if let Some(v) = flag(&args, "--threshold").and_then(|v| v.parse().ok()) {
+                opt.cluster_threshold = v;
+            }
+            if let Some(v) = flag(&args, "--voz-limiar").and_then(|v| v.parse().ok()) {
+                opt.voice_threshold = v;
+            }
+            if has(&args, "--sem-refinar") {
+                opt.refine_distance = None;
+            } else if let Some(v) = flag(&args, "--dist").and_then(|v| v.parse().ok()) {
+                opt.refine_distance = Some(v);
+            }
+            if has(&args, "--denoise") || has(&args, "--agc") {
+                opt.preproc = Some(Preproc { denoise: has(&args, "--denoise"), agc: has(&args, "--agc") });
+            }
             let store = VoiceStore::open(&db_path())?;
             let t0 = std::time::Instant::now();
             let a = analyze(&SherpaPaths::locate()?, &pcm, &opt, Some(&store))?;

@@ -55,9 +55,10 @@ medido ainda sem o reagrupamento). Continua disponível com `--denoise`/`--agc` 
 **Voz conhecida** (cadastrada num áudio, reconhecida em outro; acurácia de nome por tempo de fala): online ~95 %,
 canal único 86–95 %. Sem falsos positivos com vozes não cadastradas na rodada anterior.
 
-**Custo** (desktop, 1 h = áudio sintético repetido, sem nº de participantes): 526 s de análise (8,8 min, linear
-com a duração: 29,5 s para 208 s), pico de RAM 541 MB só no processo de análise, que sai ao terminar.
-O app parado não carrega nada disso.
+**Custo** (desktop de 12 núcleos, 1 h = áudio sintético repetido, sem nº de participantes): 526 s (8,8 min) com a máquina livre
+e 743 s com a máquina a load 15 (outros processos rodando). A segmentação do Sherpa é ~95 % do tempo (39 s de 43 s em 208 s de
+áudio); o reagrupamento leva 2 s. Pico de RAM ≈ 540 MB só durante a análise, que sai ao terminar. O app parado não carrega nada disso.
+Pendente de otimização (não feito): o pico vem do carregamento do áudio inteiro + Sherpa; o denoise opcional usa ~1,5 GB em 1 h.
 
 **Honestidade sobre a medição**: as vozes são TTS (3 masculinas parecidas) e o ruído/reverb é sintético; fala real
 tende a ser mais variada entre pessoas, mas também mais irregular. Os números são da bancada, não de reunião real.

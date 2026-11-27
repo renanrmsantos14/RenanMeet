@@ -44,7 +44,7 @@ pub struct Extractor {
 }
 
 impl Extractor {
-    pub fn open(lib_path: &Path, model_path: &Path) -> Result<Self> {
+    pub fn open(lib_path: &Path, model_path: &Path, threads: i32) -> Result<Self> {
         // Carrega antes o onnxruntime que acompanha o Sherpa (evita pegar outro do sistema).
         #[cfg(windows)]
         let _ort = lib_path
@@ -64,7 +64,7 @@ impl Extractor {
             let create: Create = sym!("SherpaOnnxCreateSpeakerEmbeddingExtractor", Create);
             let model = CString::new(model_path.to_string_lossy().as_bytes())?;
             let provider = CString::new("cpu")?;
-            let cfg = Config { model: model.as_ptr(), num_threads: 2, debug: 0, provider: provider.as_ptr() };
+            let cfg = Config { model: model.as_ptr(), num_threads: threads, debug: 0, provider: provider.as_ptr() };
             let handle = create(&cfg);
             if handle.is_null() {
                 bail!("modelo de impressão de voz inválido: {}", model_path.display());
