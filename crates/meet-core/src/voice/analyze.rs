@@ -70,17 +70,16 @@ pub fn analyze(paths: &SherpaPaths, pcm: &[f32], opt: &AnalyzeOptions, store: Op
         None => Cow::Borrowed(pcm),
     };
     let t0 = std::time::Instant::now();
-    let tmp = tmp_wav();
-    write_wav_16k(&tmp, &work)?;
-    let spans = diarize::run(paths, &tmp, DiarizeOptions { num_speakers: opt.num_speakers, threshold: opt.cluster_threshold });
-    let _ = std::fs::remove_file(&tmp);
-    let mut spans = spans?;
+    let tmp = TmpWav(tmp_wav());
+    write_wav_16k(&tmp.0, &work)?;
+    let mut spans = diarize::run(paths, &tmp.0, DiarizeOptions { num_speakers: opt.num_speakers, threshold: opt.cluster_threshold })?;
+    drop(tmp);
     eprintln!("  segmentação (Sherpa): {:.1} s", t0.elapsed().as_secs_f64());
     let t1 = std::time::Instant::now();
 
     let mut ex = Extractor::open(&paths.lib, &paths.embedding, ANALYSIS_THREADS)?;
     if let Some(distance) = opt.refine_distance {
-        spans = super::refine::refine(&mut ex, &work, &spans, opt.num_speakers.map(|n| n as usize), distance)?;
+        spans = super::refine::refine(&mut ex, &work, &spans, opt.num_speakers.filter(|n| *n >= 1).map(|n| n as usize), distance)?;
     }
     eprintln!("  reagrupamento: {:.1} s", t1.elapsed().as_secs_f64());
     let mut ids: Vec<i64> = spans.iter().map(|s| s.cluster).collect();
@@ -91,10 +90,11 @@ pub fn analyze(paths: &SherpaPaths, pcm: &[f32], opt: &AnalyzeOptions, store: Op
         let ranges: Vec<(f64, f64)> = spans.iter().filter(|s| s.cluster == c).map(|s| (s.start, s.end)).collect();
         let seconds = ranges.iter().map(|(a, b)| b - a).sum();
         let audio = gather(&work, &ranges, 60.0);
-        let Ok(embedding) = ex.embed(&audio) else { continue };
+        // trecho curto demais para tirar a impressão: o falante continua na lista, só sem nome
+        let embedding = ex.embed(&audio).unwrap_or_default();
         let found = match store {
-            Some(s) => s.identify(&embedding, opt.voice_threshold)?,
-            None => None,
+            Some(s) if !embedding.is_empty() => s.identify(&embedding, opt.voice_threshold)?,
+            _ => None,
         };
         clusters.push(ClusterInfo {
             cluster: c,
@@ -105,7 +105,20 @@ pub fn analyze(paths: &SherpaPaths, pcm: &[f32], opt: &AnalyzeOptions, store: Op
             score: found.as_ref().map(|(_, s)| *s),
         });
     }
+    unique_voices(&mut clusters);
     Ok(Analysis { spans, clusters })
+}
+
+/// Uma voz salva só pode nomear um falante da gravação: em caso de empate, fica quem tem o maior cosseno.
+fn unique_voices(clusters: &mut [ClusterInfo]) {
+    let scores: Vec<(usize, i64, f32)> =
+        clusters.iter().enumerate().filter_map(|(i, c)| Some((i, c.voice_id?, c.score?))).collect();
+    for &(i, voice, score) in &scores {
+        if scores.iter().any(|&(j, v, s)| j != i && v == voice && (s > score || (s == score && j < i))) {
+            let c = &mut clusters[i];
+            (c.voice_id, c.name, c.score) = (None, None, None);
+        }
+    }
 }
 
 /// Impressão de voz de uma leitura (cadastro): remove silêncio simples e tira a impressão.
@@ -129,8 +142,36 @@ fn trim_silence(pcm: &[f32]) -> Vec<f32> {
     out
 }
 
+/// Apaga o WAV temporário em qualquer saída (inclusive erro no meio da escrita).
+struct TmpWav(PathBuf);
+
+impl Drop for TmpWav {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 fn tmp_wav() -> PathBuf {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let d = data_dir().join("tmp");
     let _ = std::fs::create_dir_all(&d);
-    d.join(format!("analise-{}.wav", std::process::id()))
+    d.join(format!("analise-{}-{}.wav", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cluster(c: i64, voice: Option<i64>, score: Option<f32>) -> ClusterInfo {
+        ClusterInfo { cluster: c, seconds: 1.0, embedding: vec![], voice_id: voice, name: voice.map(|v| format!("v{v}")), score }
+    }
+
+    #[test]
+    fn voz_salva_nomeia_so_um_falante() {
+        let mut cs = vec![cluster(0, Some(1), Some(0.6)), cluster(1, Some(1), Some(0.8)), cluster(2, Some(2), Some(0.7)), cluster(3, None, None)];
+        unique_voices(&mut cs);
+        assert!(cs[0].voice_id.is_none() && cs[0].name.is_none());
+        assert_eq!(cs[1].voice_id, Some(1));
+        assert_eq!(cs[2].voice_id, Some(2));
+    }
 }

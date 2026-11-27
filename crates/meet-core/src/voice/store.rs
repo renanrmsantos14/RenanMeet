@@ -89,6 +89,9 @@ impl VoiceStore {
 
     /// Junta `from` em `into` (mesma pessoa cadastrada duas vezes) e apaga `from`.
     pub fn merge(&self, into: i64, from: i64) -> Result<()> {
+        if into == from {
+            bail!("escolha duas vozes diferentes");
+        }
         let all = self.list()?;
         let (Some(a), Some(b)) = (all.iter().find(|v| v.id == into), all.iter().find(|v| v.id == from)) else { bail!("voz inexistente") };
         self.reinforce(a.id, &b.embedding, b.seconds)?;
@@ -122,6 +125,7 @@ mod tests {
         let (v, sc) = s.identify(&[0.95, 0.05, 0.0], 0.8).unwrap().unwrap();
         assert!(v.name.starts_with("Ana") && sc > 0.99);
         assert!(s.identify(&[0.0, 0.0, 1.0], 0.5).unwrap().is_none());
+        assert!(s.merge(a, a).is_err());
         s.merge(a, b).unwrap();
         assert_eq!(s.list().unwrap().len(), 2);
         s.rename(a, "Ana Souza").unwrap();

@@ -28,3 +28,4 @@ skill-observations/
 *.status
 __pycache__/
 *.pyc
+.verificacao/

@@ -38,8 +38,10 @@ linkado ao binário principal.
 **Reagrupamento por trecho (novo, `voice/refine.rs`)**: o clustering padrão do Sherpa errava muito no canal único.
 Trocamos por trechos de até 6 s → embedding → subtrai a média da gravação → ligação média aglomerativa
 (com nº de participantes, ou limiar de distância 0,75 sem ele). O limiar é sensível: 0,6 → 15,8 %, 0,75 → 7,7 %,
-0,9 → 12,2 %, 1,0 → 21,5 % (sem nº de participantes). **Informar o nº de participantes é recomendado.**
-Centralizar pela média não mudou o resultado (6,8 % nos dois); fica ligado por padrão.
+0,9 → 12,2 %, 1,0 → 21,5 % (medido antes do conserto de fusão de trechos abaixo; o padrão 0,75 segue o melhor) (sem nº de participantes). **Informar o nº de participantes é recomendado.**
+Centralizar pela média não mudou o resultado (6,8 % nos dois); fica sempre ligado.
+A revisão achou que fundir trechos encolhia spans sobrepostos (`last.end` recuava); com `max` o canal único caiu de 6,9 % para 4,9 %.
+Uma voz salva só nomeia um falante por gravação (o de maior cosseno).
 
 **Pré-processamento (RNNoise e AGC) desligado por padrão**: piorou o DER (sem 26,1 %, só denoise 35,3 %, só AGC 31,3 %,
 medido ainda sem o reagrupamento). Continua disponível com `--denoise`/`--agc` no `meetcli`.
@@ -48,12 +50,13 @@ medido ainda sem o reagrupamento). Continua disponível com `--denoise`/`--agc` 
 
 | Cenário | Antes | Depois |
 |---|---|---|
-| Online (2 canais mixados), nº conhecido | 3,3 % | **1,2 %** (0,3–3,2) |
-| Canal único (sala), nº conhecido | 26,1 % (10–39) | **6,9 %** (3,3–10,8) |
-| Canal único, nº desconhecido | — | **7,8 %** (4,9–11,9) |
+| Online (2 canais mixados), nº conhecido | 3,3 % | **1,0 %** (0,3–2,0) |
+| Canal único (sala), nº conhecido | 26,1 % (10–39) | **4,9 %** (3,3–6,4) |
+| Canal único, nº desconhecido | — | **5,6 %** (4,9–7,5) |
 
-**Voz conhecida** (cadastrada num áudio, reconhecida em outro; acurácia de nome por tempo de fala): online ~95 %,
-canal único 86–95 %. Sem falsos positivos com vozes não cadastradas na rodada anterior.
+**Voz conhecida** (4 vozes cadastradas em `online_4`, reconhecidas nos outros 7 áudios com nº de falantes informado; acurácia do nome por tempo de fala):
+online 94,7–95,6 %, canal único 90,6–94,7 % (média 92,8 %). Falso positivo: cadastrando só Renan e Ana, Caio e Davi ficaram sem nome
+(cosseno mínimo 0,5; Ana 0,79 e Renan 0,77 nos acertos).
 
 **Custo** (desktop de 12 núcleos, 1 h = áudio sintético repetido, sem nº de participantes): 526 s (8,8 min) com a máquina livre
 e 743 s com a máquina a load 15 (outros processos rodando). A segmentação do Sherpa é ~95 % do tempo (39 s de 43 s em 208 s de

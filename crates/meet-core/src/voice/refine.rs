@@ -128,7 +128,7 @@ pub fn refine(ex: &mut Extractor, pcm: &[f32], spans: &[Span], num_speakers: Opt
         // junta com o anterior se mesmo rótulo e contíguo
         if let Some(last) = out.last_mut() {
             if last.cluster == l as i64 && items[i].0 - last.end < 0.6 {
-                last.end = items[i].1;
+                last.end = last.end.max(items[i].1);
                 continue;
             }
         }

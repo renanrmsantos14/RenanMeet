@@ -24,10 +24,10 @@ Prova só vale com número medido. Não use áudio de reunião real; tudo é sin
    - `meetcli diarize testdata/out/online_2.wav --speakers 2 --nomear "1=Ana"` (o cluster que não for Renan)
    - `meetcli diarize testdata/out/sala_4.wav --speakers 4 --saida h.json` e
      `der.py verdade.json h.json --nomes` (acurácia do nome, só Renan e Ana contam; Caio e Davi devem ficar sem nome).
-5. Memória e tempo: `/usr/bin/time -v meetcli diarize ...` (pico em KB) e tempo ÷ duração; para 1 h, repetir o WAV até 3600 s e medir de verdade (o agrupamento é superlinear em tese; medido: linear até 1 h).
+5. Memória e tempo: `/usr/bin/time -v meetcli diarize ...` (pico em KB) e tempo ÷ duração; para 1 h, repetir o WAV até 3600 s e medir de verdade (a segmentação domina; o reagrupamento é O(n³) em tese, 2 s em 3,5 min).
 
 ## Critérios
-- Referência atual (D4): online ≈ 1,2 %, canal único ≈ 6,9 % (nº conhecido) / 7,8 % (auto); 1 h = ~9 min e ~540 MB de pico só no processo de análise.
+- Referência atual (D4): online ≈ 1,0 %, canal único ≈ 4,9 % (nº conhecido) / 5,6 % (auto); 1 h = 9–12 min (95 % é a segmentação do Sherpa; varia com a carga da máquina) e ~540 MB de pico só no processo de análise.
 - Não regredir a média do `online_*` nem a do `canal_unico_*` registradas em `docs/decisoes.md` (D4) além de 3 pontos.
 - Nenhum falante desconhecido (Caio/Davi) pode receber nome de voz salva (falso positivo = 0).
 - O processo de análise sai ao terminar (RAM devolvida).
