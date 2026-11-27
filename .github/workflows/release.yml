@@ -1,0 +1,162 @@
+name: Release Windows + Android
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-rust-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate updater signing key
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'Secret TAURI_SIGNING_PRIVATE_KEY nao configurado; updater artifacts nao podem ser publicados com seguranca.'
+          }
+
+      - name: Build installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Prepare updater manifest
+        shell: pwsh
+        run: |
+          $bundleRoot = Join-Path $env:GITHUB_WORKSPACE 'src-tauri/target/release/bundle'
+          $installer = Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'nsis') -Filter '*.exe' -File | Select-Object -First 1
+          $signature = if ($installer) { Get-Item -LiteralPath "$($installer.FullName).sig" -ErrorAction SilentlyContinue }
+          if (-not $installer -or -not $signature) {
+            throw "instalador ou assinatura nao encontrado em $bundleRoot"
+          }
+
+          $config = Get-Content -Raw -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'src-tauri/tauri.conf.json') | ConvertFrom-Json
+          $signatureText = (Get-Content -Raw -LiteralPath $signature.FullName).Trim()
+          $metadata = [ordered]@{
+            version = $config.version
+            notes = "AtaLocal $($config.version)"
+            pub_date = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = [ordered]@{
+              'windows-x86_64' = [ordered]@{
+                signature = $signatureText
+                url = "https://github.com/renanrmsantos14/AtaLocal/releases/download/$env:GITHUB_REF_NAME/$($installer.Name)"
+              }
+            }
+          }
+
+          $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'latest.json') -Encoding utf8
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            src-tauri/target/release/bundle/nsis/*
+            latest.json
+
+  android-native:
+    name: Kotlin Android APK (arm64)
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.0.12077973"
+
+      - name: Configure Kotlin APK signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/atalocal-kotlin-release.jks"
+          {
+            printf 'storeFile=%s\n' "$RUNNER_TEMP/atalocal-kotlin-release.jks"
+            printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+          } > android/keystore.properties
+
+      - name: Test and assemble Kotlin app
+        working-directory: android
+        run: ./gradlew testDebugUnitTest assembleRelease --no-daemon --stacktrace
+
+      - name: Prepare Kotlin APK and hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk_path="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$apk_path"
+          cp "$apk_path" "AtaLocal-${GITHUB_REF_NAME}-kotlin-android-arm64.apk"
+          sha256sum "AtaLocal-${GITHUB_REF_NAME}-kotlin-android-arm64.apk" > "AtaLocal-${GITHUB_REF_NAME}-kotlin-android-arm64.apk.sha256"
+
+      - name: Publish Kotlin APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            AtaLocal-${{ github.ref_name }}-kotlin-android-arm64.apk
+            AtaLocal-${{ github.ref_name }}-kotlin-android-arm64.apk.sha256
+
+      - name: Upload Kotlin APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: atalocal-kotlin-arm64-debug
+          path: android/app/build/outputs/apk/release/app-release.apk
