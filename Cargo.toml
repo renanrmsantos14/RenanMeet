@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/meet-core"]
+members = ["crates/meet-core", "crates/meet-app"]
 
 [profile.dev.package."*"]
 opt-level = 2

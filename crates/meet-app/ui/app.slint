@@ -1,0 +1,609 @@
+import { LineEdit, Switch, Slider, ScrollView, Palette } from "std-widgets.slint";
+export { Palette }
+
+export global Theme {
+    in-out property <bool> dark: true;
+    out property <color> bg: dark ? #14161a : #f4f5f7;
+    out property <color> panel: dark ? #1c1f25 : #ffffff;
+    out property <color> raised: dark ? #262a32 : #e9ebef;
+    out property <color> line: dark ? #2e333c : #d9dce2;
+    out property <color> text: dark ? #e8eaee : #1b1e24;
+    out property <color> muted: dark ? #8d95a3 : #646b78;
+    out property <color> accent: #4f8cff;
+    out property <color> danger: #e5484d;
+    out property <color> ok: #30a46c;
+}
+
+export struct MeetingRow {
+    id: string,
+    title: string,
+    meta: string,
+    status: string,
+    busy: bool,
+    failed: bool,
+}
+
+export struct Line {
+    start: float,
+    time: string,
+    speaker: string,
+    text: string,
+    color: color,
+    active: bool,
+}
+
+export struct SpeakerRow {
+    cluster: int,
+    name: string,
+    detail: string,
+    color: color,
+}
+
+export struct VoiceRow {
+    id: int,
+    name: string,
+    detail: string,
+}
+
+export struct TaskRow {
+    text: string,
+    who: string,
+    done: bool,
+}
+
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+    height: 30px;
+    border-radius: 15px;
+    background: selected ? Theme.accent : Theme.raised;
+    t := Text {
+        text: root.label;
+        color: root.selected ? white : Theme.text;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    width: t.preferred-width + 28px;
+    TouchArea { clicked => { root.clicked(); } mouse-cursor: pointer; }
+}
+
+component Action inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 32px;
+    border-radius: 8px;
+    opacity: enabled ? 1 : 0.45;
+    background: primary ? Theme.accent : (danger ? Theme.danger : Theme.raised);
+    t := Text {
+        text: root.label;
+        color: (root.primary || root.danger) ? white : Theme.text;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    width: t.preferred-width + 26px;
+    TouchArea { clicked => { if (root.enabled) { root.clicked(); } } mouse-cursor: pointer; }
+}
+
+component Section inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+export component App inherits Window {
+    title: "RenanMeet";
+    min-width: 820px;
+    min-height: 540px;
+    preferred-width: 1080px;
+    preferred-height: 700px;
+    background: Theme.bg;
+    default-font-size: 14px;
+
+    // estado geral
+    in property <string> version;
+    in property <[MeetingRow]> meetings;
+    in-out property <string> query;
+    in property <string> selected-id;
+    in property <string> view: "reuniao"; // reuniao | vozes | config
+    in property <string> toast;
+    in property <bool> recording;
+    in property <string> rec-time: "00:00";
+    in property <float> rec-level-mic;
+    in property <float> rec-level-sys;
+    in property <bool> rec-dialog;
+    in-out property <bool> rec-online: true;
+    in-out property <string> rec-people: "";
+    in property <string> rec-error;
+
+    // detalhe
+    in property <string> d-title;
+    in property <string> d-meta;
+    in property <string> d-status;
+    in property <bool> d-busy;
+    in property <bool> d-failed;
+    in property <string> d-summary;
+    in property <[string]> d-decisions;
+    in property <[string]> d-open;
+    in property <[TaskRow]> d-tasks;
+    in property <[Line]> lines;
+    in property <[SpeakerRow]> speakers;
+    in-out property <string> tab: "ata";
+    in property <bool> has-audio;
+    in property <bool> playing;
+    in property <float> pos;
+    in property <float> dur;
+    in property <string> pos-text: "00:00";
+    in property <string> dur-text: "00:00";
+    in-out property <string> rename-text;
+    in property <int> rename-cluster: -1;
+
+    // vozes e configuração
+    in property <[VoiceRow]> voices;
+    in-out property <string> voice-edit;
+    in property <int> voice-edit-id: -1;
+    in property <int> voice-merge-from: -1;
+    in property <string> key-state;
+    in-out property <string> key-input;
+    in-out property <bool> cfg-dark: true;
+    in-out property <bool> cfg-autostart;
+    in property <string> cfg-hotkey;
+    in-out property <string> cfg-threshold: "0.50";
+    in property <string> lgpd-text;
+    in property <bool> confirm-delete;
+    in property <string> enroll-state;
+
+    callback select(string);
+    callback search(string);
+    callback open-record;
+    callback cancel-record;
+    callback start-record;
+    callback stop-record;
+    callback set-view(string);
+    callback toggle-play;
+    callback seek(float);
+    callback seek-line(float);
+    callback begin-rename(int, string);
+    callback commit-rename(int, string, bool);
+    callback cancel-rename;
+    callback export-md;
+    callback send-wiki;
+    callback reprocess;
+    callback toggle-task(int);
+    callback ask-delete;
+    callback delete-meeting(bool);
+    callback copy-lgpd;
+    callback save-key;
+    callback clear-key;
+    callback set-dark(bool);
+    callback set-autostart(bool);
+    callback set-threshold(string);
+    callback voice-begin(int, string);
+    callback voice-commit(int, string);
+    callback voice-delete(int);
+    callback voice-merge(int, int);
+    callback enroll-owner;
+    callback import-file;
+
+    HorizontalLayout {
+        // ---------- barra lateral ----------
+        Rectangle {
+            width: 320px;
+            background: Theme.panel;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "RenanMeet"; font-size: 20px; font-weight: 800; color: Theme.text; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Action { label: "Importar"; clicked => { root.import-file(); } }
+                }
+                if !root.recording: Action {
+                    label: "●  Gravar reunião";
+                    primary: true;
+                    height: 40px;
+                    clicked => { root.open-record(); }
+                }
+                if root.recording: Rectangle {
+                    height: 78px;
+                    border-radius: 10px;
+                    background: Theme.danger.with-alpha(0.14);
+                    border-width: 1px;
+                    border-color: Theme.danger;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle { width: 10px; height: 10px; border-radius: 5px; background: Theme.danger; y: 6px; }
+                            Text { text: "Gravando · " + root.rec-time; color: Theme.text; font-weight: 700; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Action { label: "Parar"; danger: true; height: 28px; clicked => { root.stop-record(); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Rectangle { height: 6px; border-radius: 3px; background: Theme.raised; Rectangle { x: 0; width: parent.width * root.rec-level-mic; border-radius: 3px; background: Theme.ok; } }
+                            if root.rec-online: Rectangle { height: 6px; border-radius: 3px; background: Theme.raised; Rectangle { x: 0; width: parent.width * root.rec-level-sys; border-radius: 3px; background: Theme.accent; } }
+                        }
+                    }
+                }
+                LineEdit {
+                    placeholder-text: "Buscar nas reuniões…";
+                    text <=> root.query;
+                    edited(t) => { root.search(t); }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        for m in root.meetings: Rectangle {
+                            height: 62px;
+                            border-radius: 8px;
+                            background: m.id == root.selected-id && root.view == "reuniao" ? Theme.accent.with-alpha(0.18) : (ta.has-hover ? Theme.raised : transparent);
+                            VerticalLayout {
+                                padding-left: 10px; padding-right: 10px; padding-top: 8px; padding-bottom: 8px;
+                                spacing: 3px;
+                                Text { text: m.title; color: Theme.text; font-weight: 600; overflow: elide; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text { text: m.meta; color: Theme.muted; font-size: 12px; overflow: elide; horizontal-stretch: 1; }
+                                    if m.status != "": Text { text: m.status; font-size: 12px; color: m.failed ? Theme.danger : Theme.accent; }
+                                }
+                            }
+                            ta := TouchArea { clicked => { root.select(m.id); } mouse-cursor: pointer; }
+                        }
+                        if root.meetings.length == 0: Text {
+                            text: root.query == "" ? "Nenhuma reunião ainda.\nGrave ou importe um áudio." : "Nada encontrado.";
+                            color: Theme.muted;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Chip { label: "Reuniões"; selected: root.view == "reuniao"; clicked => { root.set-view("reuniao"); } }
+                    Chip { label: "Vozes"; selected: root.view == "vozes"; clicked => { root.set-view("vozes"); } }
+                    Chip { label: "Ajustes"; selected: root.view == "config"; clicked => { root.set-view("config"); } }
+                }
+            }
+        }
+        Rectangle { width: 1px; background: Theme.line; }
+
+        // ---------- conteúdo ----------
+        Rectangle {
+            horizontal-stretch: 1;
+
+            // reunião
+            if root.view == "reuniao" && root.selected-id == "": VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+                Text { text: "Selecione uma reunião"; color: Theme.text; font-size: 18px; font-weight: 700; horizontal-alignment: center; }
+                Text { text: "ou grave uma nova — a transcrição e a ata ficam prontas depois."; color: Theme.muted; horizontal-alignment: center; }
+            }
+            if root.view == "reuniao" && root.selected-id != "": VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text { text: root.d-title; font-size: 22px; font-weight: 800; color: Theme.text; overflow: elide; }
+                        Text { text: root.d-meta; color: Theme.muted; font-size: 13px; }
+                    }
+                    Action { label: "Exportar .md"; enabled: !root.d-busy; clicked => { root.export-md(); } }
+                    Action { label: "Enviar à wiki"; enabled: !root.d-busy && root.d-summary != ""; clicked => { root.send-wiki(); } }
+                    Action { label: "Reprocessar"; enabled: !root.d-busy && root.has-audio; clicked => { root.reprocess(); } }
+                    Action { label: "Apagar"; danger: true; clicked => { root.ask-delete(); } }
+                }
+                if root.d-status != "": Rectangle {
+                    height: 36px;
+                    border-radius: 8px;
+                    background: (root.d-failed ? Theme.danger : Theme.accent).with-alpha(0.14);
+                    Text { x: 12px; text: root.d-status; color: Theme.text; vertical-alignment: center; overflow: elide; width: parent.width - 24px; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Chip { label: "Ata"; selected: root.tab == "ata"; clicked => { root.tab = "ata"; } }
+                    Chip { label: "Transcrição"; selected: root.tab == "transcricao"; clicked => { root.tab = "transcricao"; } }
+                    Chip { label: "Falantes"; selected: root.tab == "falantes"; clicked => { root.tab = "falantes"; } }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: 10px;
+                    background: Theme.panel;
+                    clip: true;
+                    if root.tab == "ata": ScrollView {
+                        VerticalLayout {
+                            alignment: start;
+                            padding: 18px;
+                            spacing: 8px;
+                            if root.d-summary == "": Text { text: root.d-busy ? "A ata aparece quando o processamento terminar." : "Sem ata."; color: Theme.muted; }
+                            if root.d-summary != "": Section { text: "RESUMO"; }
+                            if root.d-summary != "": Text { text: root.d-summary; color: Theme.text; wrap: word-wrap; }
+                            if root.d-decisions.length > 0: Section { text: "DECISÕES"; }
+                            for d in root.d-decisions: Text { text: "•  " + d; color: Theme.text; wrap: word-wrap; }
+                            if root.d-tasks.length > 0: Section { text: "TAREFAS"; }
+                            for t[i] in root.d-tasks: Rectangle {
+                                height: 30px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Rectangle {
+                                        width: 18px; height: 18px; y: 6px; border-radius: 4px;
+                                        border-width: 2px; border-color: t.done ? Theme.ok : Theme.muted;
+                                        background: t.done ? Theme.ok : transparent;
+                                    }
+                                    Text { text: t.text + (t.who != "" ? "  —  " + t.who : ""); color: t.done ? Theme.muted : Theme.text; vertical-alignment: center; overflow: elide; }
+                                }
+                                TouchArea { clicked => { root.toggle-task(i); } mouse-cursor: pointer; }
+                            }
+                            if root.d-open.length > 0: Section { text: "PONTOS EM ABERTO"; }
+                            for d in root.d-open: Text { text: "•  " + d; color: Theme.text; wrap: word-wrap; }
+                        }
+                    }
+                    if root.tab == "transcricao": ScrollView {
+                        VerticalLayout {
+                            alignment: start;
+                            padding: 12px;
+                            spacing: 2px;
+                            if root.lines.length == 0: Text { text: root.d-busy ? "A transcrição aparece quando o processamento terminar." : "Sem transcrição."; color: Theme.muted; }
+                            for l in root.lines: Rectangle {
+                                border-radius: 6px;
+                                background: l.active ? Theme.accent.with-alpha(0.2) : (lta.has-hover ? Theme.raised : transparent);
+                                HorizontalLayout {
+                                    padding: 8px;
+                                    spacing: 10px;
+                                    Text { text: l.time; color: Theme.muted; font-size: 12px; width: 44px; vertical-alignment: top; }
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: 1px;
+                                        Text { text: l.speaker; color: l.color; font-weight: 700; font-size: 12px; }
+                                        Text { text: l.text; color: Theme.text; wrap: word-wrap; }
+                                    }
+                                }
+                                lta := TouchArea { clicked => { root.seek-line(l.start); } mouse-cursor: pointer; }
+                            }
+                        }
+                    }
+                    if root.tab == "falantes": ScrollView {
+                        VerticalLayout {
+                            alignment: start;
+                            padding: 18px;
+                            spacing: 10px;
+                            if root.speakers.length == 0: Text { text: "Nenhum falante identificado."; color: Theme.muted; }
+                            for s in root.speakers: Rectangle {
+                                height: 52px;
+                                border-radius: 8px;
+                                background: Theme.raised;
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    spacing: 10px;
+                                    Rectangle { width: 14px; height: 14px; y: 14px; border-radius: 7px; background: s.color; }
+                                    if root.rename-cluster != s.cluster: VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        Text { text: s.name; color: Theme.text; font-weight: 700; }
+                                        Text { text: s.detail; color: Theme.muted; font-size: 12px; }
+                                    }
+                                    if root.rename-cluster != s.cluster: Action { label: "Nomear"; clicked => { root.begin-rename(s.cluster, s.name); } }
+                                    if root.rename-cluster == s.cluster: LineEdit {
+                                        horizontal-stretch: 1;
+                                        text <=> root.rename-text;
+                                        placeholder-text: "Nome";
+                                        accepted(t) => { root.commit-rename(s.cluster, t, true); }
+                                    }
+                                    if root.rename-cluster == s.cluster: Action { label: "Salvar e lembrar"; primary: true; clicked => { root.commit-rename(s.cluster, root.rename-text, true); } }
+                                    if root.rename-cluster == s.cluster: Action { label: "Só aqui"; clicked => { root.commit-rename(s.cluster, root.rename-text, false); } }
+                                    if root.rename-cluster == s.cluster: Action { label: "✕"; clicked => { root.cancel-rename(); } }
+                                }
+                            }
+                        }
+                    }
+                }
+                // player
+                if root.has-audio: Rectangle {
+                    height: 54px;
+                    border-radius: 10px;
+                    background: Theme.panel;
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 12px;
+                        Action { label: root.playing ? "❚❚" : "▶"; primary: true; width: 44px; clicked => { root.toggle-play(); } }
+                        Text { text: root.pos-text; color: Theme.muted; vertical-alignment: center; width: 46px; }
+                        Slider {
+                            horizontal-stretch: 1;
+                            minimum: 0;
+                            maximum: root.dur > 1 ? root.dur : 1;
+                            value: root.pos;
+                            released(v) => { root.seek(v); }
+                        }
+                        Text { text: root.dur-text; color: Theme.muted; vertical-alignment: center; width: 46px; }
+                    }
+                }
+            }
+
+            // vozes
+            if root.view == "vozes": VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                Text { text: "Vozes salvas"; font-size: 22px; font-weight: 800; color: Theme.text; }
+                Text { text: "Quem você nomeia uma vez é reconhecido nas próximas reuniões. Fica tudo neste computador."; color: Theme.muted; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Action { label: "Cadastrar minha voz (~20 s)"; primary: true; clicked => { root.enroll-owner(); } }
+                    Text { text: root.enroll-state; color: Theme.muted; vertical-alignment: center; }
+                }
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        alignment: start;
+                        spacing: 8px;
+                        if root.voices.length == 0: Text { text: "Nenhuma voz salva ainda."; color: Theme.muted; }
+                        for v in root.voices: Rectangle {
+                            height: 56px;
+                            border-radius: 8px;
+                            background: Theme.panel;
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+                                if root.voice-edit-id != v.id: VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    Text { text: v.name; color: Theme.text; font-weight: 700; }
+                                    Text { text: v.detail; color: Theme.muted; font-size: 12px; }
+                                }
+                                if root.voice-edit-id == v.id: LineEdit {
+                                    horizontal-stretch: 1;
+                                    text <=> root.voice-edit;
+                                    accepted(t) => { root.voice-commit(v.id, t); }
+                                }
+                                if root.voice-edit-id == v.id: Action { label: "Salvar"; primary: true; clicked => { root.voice-commit(v.id, root.voice-edit); } }
+                                if root.voice-edit-id != v.id: Action { label: "Renomear"; clicked => { root.voice-begin(v.id, v.name); } }
+                                if root.voice-merge-from == -1: Action { label: "Juntar…"; clicked => { root.voice-merge(v.id, -2); } }
+                                if root.voice-merge-from != -1 && root.voice-merge-from != v.id: Action { label: "Juntar aqui"; primary: true; clicked => { root.voice-merge(root.voice-merge-from, v.id); } }
+                                if root.voice-merge-from == v.id: Action { label: "Cancelar"; clicked => { root.voice-merge(-1, -1); } }
+                                Action { label: "Apagar"; danger: true; clicked => { root.voice-delete(v.id); } }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ajustes
+            if root.view == "config": ScrollView {
+                VerticalLayout {
+                    alignment: start;
+                    padding: 20px;
+                    spacing: 14px;
+                    Text { text: "Ajustes"; font-size: 22px; font-weight: 800; color: Theme.text; }
+                    Section { text: "CHAVE DA GROQ"; }
+                    Text { text: "Fica no cofre do sistema (nunca em arquivo). " + root.key-state; color: Theme.muted; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit { horizontal-stretch: 1; input-type: password; placeholder-text: "gsk_…"; text <=> root.key-input; accepted(_) => { root.save-key(); } }
+                        Action { label: "Salvar"; primary: true; clicked => { root.save-key(); } }
+                        Action { label: "Remover"; danger: true; clicked => { root.clear-key(); } }
+                    }
+                    Section { text: "APARÊNCIA E SISTEMA"; }
+                    HorizontalLayout { spacing: 10px; Switch { text: "Tema escuro"; checked <=> root.cfg-dark; toggled => { root.set-dark(root.cfg-dark); } } }
+                    HorizontalLayout { spacing: 10px; Switch { text: "Abrir ao iniciar o computador"; checked <=> root.cfg-autostart; toggled => { root.set-autostart(root.cfg-autostart); } } }
+                    if root.cfg-hotkey != "": Text { text: root.cfg-hotkey; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                    Section { text: "RECONHECIMENTO DE VOZ"; }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text { text: "Limiar de semelhança (0,30 a 0,80)"; color: Theme.text; vertical-alignment: center; }
+                        LineEdit { width: 80px; text <=> root.cfg-threshold; accepted(t) => { root.set-threshold(t); } }
+                        Text { text: "menor reconhece mais, mas erra mais"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    }
+                    Section { text: "AVISO DE GRAVAÇÃO (LGPD)"; }
+                    Text { text: root.lgpd-text; color: Theme.text; wrap: word-wrap; }
+                    HorizontalLayout { Action { label: "Copiar aviso"; clicked => { root.copy-lgpd(); } } }
+                }
+            }
+        }
+    }
+
+    // versão (canto, sutil, não captura clique)
+    Text {
+        x: parent.width - self.width - 10px;
+        y: parent.height - self.height - 6px;
+        text: root.version;
+        color: Theme.muted.with-alpha(0.7);
+        font-size: 11px;
+    }
+
+    // aviso rápido
+    if root.toast != "": Rectangle {
+        x: 320px + (parent.width - 320px - self.width) / 2;
+        y: parent.height - 100px;
+        width: min(560px, parent.width - 360px);
+        height: tt.preferred-height + 22px;
+        border-radius: 12px;
+        background: Theme.text;
+        tt := Text {
+            x: 16px; width: parent.width - 32px; y: 11px;
+            text: root.toast; color: Theme.bg; wrap: word-wrap; horizontal-alignment: center;
+        }
+    }
+
+    // diálogo de gravação
+    if root.rec-dialog: Rectangle {
+        background: #000000a0;
+        TouchArea { clicked => { root.cancel-record(); } }
+        Rectangle {
+            width: min(480px, parent.width - 40px);
+            height: dlg.preferred-height;
+            border-radius: 14px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.line;
+            TouchArea { }
+            dlg := VerticalLayout {
+                padding: 22px;
+                spacing: 12px;
+                Text { text: "Nova gravação"; font-size: 18px; font-weight: 800; color: Theme.text; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Chip { label: "Online (mic + áudio do sistema)"; selected: root.rec-online; clicked => { root.rec-online = true; } }
+                    Chip { label: "Presencial (só mic)"; selected: !root.rec-online; clicked => { root.rec-online = false; } }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: "Nº de participantes (opcional)"; color: Theme.text; vertical-alignment: center; }
+                    LineEdit { width: 70px; text <=> root.rec-people; placeholder-text: "auto"; }
+                }
+                Rectangle {
+                    border-radius: 8px;
+                    background: Theme.raised;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 6px;
+                        Text { text: "Avise os participantes"; font-weight: 700; color: Theme.text; }
+                        Text { text: root.lgpd-text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                        HorizontalLayout { Action { label: "Copiar aviso"; clicked => { root.copy-lgpd(); } } }
+                    }
+                }
+                if root.rec-error != "": Text { text: root.rec-error; color: Theme.danger; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Action { label: "Cancelar"; clicked => { root.cancel-record(); } }
+                    Action { label: "● Começar a gravar"; primary: true; clicked => { root.start-record(); } }
+                }
+            }
+        }
+    }
+
+    // confirmação de apagar
+    if root.confirm-delete: Rectangle {
+        background: #000000a0;
+        TouchArea { clicked => { root.delete-meeting(false); } }
+        Rectangle {
+            width: 420px;
+            height: cd.preferred-height;
+            border-radius: 14px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.line;
+            TouchArea { }
+            cd := VerticalLayout {
+                padding: 22px;
+                spacing: 12px;
+                Text { text: "Apagar esta reunião?"; font-size: 18px; font-weight: 800; color: Theme.text; }
+                Text { text: "O áudio, a transcrição e a ata saem deste computador. Não dá para desfazer."; color: Theme.muted; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Action { label: "Cancelar"; clicked => { root.delete-meeting(false); } }
+                    Action { label: "Apagar"; danger: true; clicked => { root.delete-meeting(true); } }
+                }
+            }
+        }
+    }
+}
