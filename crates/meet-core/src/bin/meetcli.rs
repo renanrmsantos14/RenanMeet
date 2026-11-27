@@ -6,6 +6,17 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use meet_core::audio::decode::{load_16k, write_wav_16k, Channel};
 use meet_core::audio::recorder::{Mode, Recorder, RecorderConfig};
+use meet_core::paths::db_path;
+use meet_core::voice::analyze::{analyze, enroll_embedding, AnalyzeOptions};
+use meet_core::voice::sherpa::SherpaPaths;
+use meet_core::voice::store::VoiceStore;
+
+fn flag(args: &[String], nome: &str) -> Option<String> {
+    args.iter().position(|a| a == nome).and_then(|i| args.get(i + 1).cloned())
+}
+fn has(args: &[String], nome: &str) -> bool {
+    args.iter().any(|a| a == nome)
+}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -49,7 +60,64 @@ fn main() -> Result<()> {
             write_wav_16k(&PathBuf::from(&args[2]), &pcm)?;
             println!("{} amostras ({:.1} s)", pcm.len(), pcm.len() as f64 / 16000.0);
         }
-        _ => bail!("comandos: record, wav"),
+        Some("diarize") => {
+            // meetcli diarize <audio> [--speakers N] [--presencial] [--denoise] [--agc] [--sem-refinar] [--dist X] [--threshold X] [--voz-limiar X] [--saida arq.json]
+            let pcm = load_16k(&PathBuf::from(&args[1]), Channel::Mix)?;
+            let opt = AnalyzeOptions {
+                num_speakers: flag(&args, "--speakers").and_then(|v| v.parse().ok()),
+                cluster_threshold: flag(&args, "--threshold").and_then(|v| v.parse().ok()).unwrap_or(0.90),
+                voice_threshold: flag(&args, "--voz-limiar").and_then(|v| v.parse().ok()).unwrap_or(0.5),
+                in_person: has(&args, "--presencial"),
+                denoise: has(&args, "--denoise"),
+                agc: has(&args, "--agc"),
+                refine: (!has(&args, "--sem-refinar")).then(|| meet_core::voice::refine::RefineOptions {
+                    num_speakers: None,
+                    distance_threshold: flag(&args, "--dist").and_then(|v| v.parse().ok()).unwrap_or(0.75),
+                    center: !has(&args, "--sem-centro"),
+                }),
+            };
+            let store = VoiceStore::open(&db_path())?;
+            let t0 = std::time::Instant::now();
+            let a = analyze(&SherpaPaths::locate()?, &pcm, &opt, Some(&store))?;
+            eprintln!("análise: {:.1} s para {:.0} s de áudio", t0.elapsed().as_secs_f64(), pcm.len() as f64 / 16000.0);
+            let nome = |c: i64| {
+                a.clusters.iter().find(|x| x.cluster == c).and_then(|x| x.name.clone()).unwrap_or_else(|| format!("Falante {}", c + 1))
+            };
+            let hip: Vec<_> = a.spans.iter().map(|s| serde_json::json!({"start": s.start, "end": s.end, "speaker": nome(s.cluster)})).collect();
+            let out = serde_json::to_string_pretty(&hip)?;
+            match flag(&args, "--saida") {
+                Some(f) => std::fs::write(f, out)?,
+                None => println!("{out}"),
+            }
+            // --nomear "0=Ana,1=Caio": salva a voz desses clusters para reconhecer depois
+            if let Some(m) = flag(&args, "--nomear") {
+                for par in m.split(',') {
+                    if let Some((c, n)) = par.split_once('=') {
+                        let c: i64 = c.trim().parse()?;
+                        if let Some(info) = a.clusters.iter().find(|x| x.cluster == c) {
+                            let id = store.add(n.trim(), &info.embedding, info.seconds as f32, false)?;
+                            eprintln!("voz {id} salva: {} ({:.0} s)", n.trim(), info.seconds);
+                        }
+                    }
+                }
+            }
+            for c in &a.clusters {
+                eprintln!("cluster {} · {:.0} s · voz {:?} · cosseno {:?}", c.cluster, c.seconds, c.name, c.score);
+            }
+        }
+        Some("enroll") => {
+            // meetcli enroll <audio> <nome> [--dono]
+            let pcm = load_16k(&PathBuf::from(&args[1]), Channel::Mix)?;
+            let (emb, secs) = enroll_embedding(&SherpaPaths::locate()?, &pcm)?;
+            let id = VoiceStore::open(&db_path())?.add(&args[2], &emb, secs, has(&args, "--dono"))?;
+            println!("voz {id} salva: {} ({secs:.0} s de fala, {} dimensões)", args[2], emb.len());
+        }
+        Some("voices") => {
+            for v in VoiceStore::open(&db_path())?.list()? {
+                println!("{}\t{}\t{:.0} s{}", v.id, v.name, v.seconds, if v.is_owner { "\tdono" } else { "" });
+            }
+        }
+        _ => bail!("comandos: record, wav, diarize, enroll, voices"),
     }
     Ok(())
 }
