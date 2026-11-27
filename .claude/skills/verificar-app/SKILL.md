@@ -23,7 +23,13 @@ Nunca grave reunião real: dados de demonstração com Groq falsa e áudio sint�
 6. Atalho: `xdotool key ctrl+alt+r` abre o diálogo de gravação (ou para a gravação em curso).
 7. Bandeja (Linux): `busctl --user get-property org.kde.StatusNotifierWatcher /StatusNotifierWatcher org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems` lista `renanmeet`.
 8. RAM: `ps -o rss= -C renanmeet` parado (medido 26,5 MB) e gravando (27,8 MB); processamento: `/usr/bin/time -f "%M KB" target/release/renanmeet process <id>` (medido 380 MB para 3 min, com Groq falsa).
-9. Windows: sem toolchain MSVC aqui, o app não é compilado nem testado — diga isso no PR.
+9. Atualização (e2e local): `cargo run -p meet-core --example chave_release -- assinar SHA256SUMS` com a chave real em `MINISIGN_SECRET_KEY`
+   (`~/.config/RenanMeet-release/release.key`; nunca imprimir). Servir em `python3 -m http.server` uma pasta com `releases/latest` (JSON com `tag_name` v9.9.9
+   e `assets` apontando para o servidor), `renanmeet-linux-x86_64` (um script que grava um arquivo-prova), `SHA256SUMS` e `.minisig`.
+   Copiar o binário para outra pasta e abrir com `RENANMEET_UPDATE_BASE=http://127.0.0.1:8765`; Ajustes → "Verificar agora" mostra "Versão 9.9.9 disponível",
+   "Atualizar e reiniciar" troca o executável (sobra `renanmeet.old`) e o arquivo-prova aparece. Hash adulterado e chave errada: `cargo test -p meet-core update`.
+   Durante gravação, cadastro de voz ou processamento o app recusa atualizar.
+10. Windows: sem toolchain MSVC aqui, o app não é compilado nem testado — diga isso no PR.
 
 ## Armadilhas
 - `pkill renanmeet` antes de reabrir (o app fica na bandeja ao fechar a janela).

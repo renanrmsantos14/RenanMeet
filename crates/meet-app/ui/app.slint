@@ -155,6 +155,9 @@ export component App inherits Window {
     in property <string> cfg-hotkey;
     in-out property <string> cfg-threshold: "0.50";
     in property <string> lgpd-text;
+    in property <string> update-text;
+    in property <bool> update-available;
+    in property <bool> update-busy;
     in property <bool> confirm-delete;
     in property <string> enroll-state;
 
@@ -189,6 +192,8 @@ export component App inherits Window {
     callback voice-merge(int, int);
     callback enroll-owner;
     callback import-file;
+    callback check-update;
+    callback apply-update;
 
     HorizontalLayout {
         // ---------- barra lateral ----------
@@ -494,6 +499,13 @@ export component App inherits Window {
                     HorizontalLayout { spacing: 10px; Switch { text: "Tema escuro"; checked <=> root.cfg-dark; toggled => { root.set-dark(root.cfg-dark); } } }
                     HorizontalLayout { spacing: 10px; Switch { text: "Abrir ao iniciar o computador"; checked <=> root.cfg-autostart; toggled => { root.set-autostart(root.cfg-autostart); } } }
                     if root.cfg-hotkey != "": Text { text: root.cfg-hotkey; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                    Section { text: "ATUALIZAÇÃO"; }
+                    Text { text: root.update-text; color: Theme.muted; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { label: "Verificar agora"; enabled: !root.update-busy; clicked => { root.check-update(); } }
+                        if root.update-available: Action { label: root.update-busy ? "Baixando…" : "Atualizar e reiniciar"; primary: true; enabled: !root.update-busy; clicked => { root.apply-update(); } }
+                    }
                     Section { text: "RECONHECIMENTO DE VOZ"; }
                     HorizontalLayout {
                         spacing: 10px;

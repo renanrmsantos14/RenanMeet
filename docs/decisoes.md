@@ -79,3 +79,13 @@ Falta ainda: DER em áudio real de domínio público e reconhecimento do Renan c
 - **Modelos**: baixados na primeira execução com SHA-256 fixado, `.part` e troca atômica; fora do repo. Não retoma download interrompido (reinicia).
 - **Importação**: `.opus`, `.wav`, `.m4a`, `.mp3`, `.flac` viram Opus mono 16 kHz (symphonia, Rust puro) — é o caminho do Android gravando e importando no PC.
 - **Não provado**: Groq real (sem chave no ambiente); só servidor local.
+
+## D6 — Tauri e Android removidos; atualização e versão (bloco 5)
+
+- **Legado removido**: `src-tauri/`, `android/` e `docs/android.md` (AtaLocal em Tauri/Kotlin com whisper.cpp/llama.cpp) saíram do repositório; o histórico do Git guarda tudo. O Android, se vier, é PR próprio, em Rust, só gravando e importando no PC.
+- **Atualização**: GitHub Releases `/releases/latest`; assets `renanmeet-linux-x86_64`, `renanmeet-windows-x86_64.exe`, `SHA256SUMS` e `SHA256SUMS.minisig`. O app confere a assinatura minisign do `SHA256SUMS` com a chave pública embutida (`update::PUBKEY`) e o sha256 do executável; falhou, descarta. Consulta 60 s após abrir e a cada 6 h (como o RenanTalk); recusa trocar durante gravação, cadastro de voz ou processamento.
+- **Troca do executável**: o atual vira `.old` (no Windows não dá para apagar em uso), o novo é copiado no lugar, o lock de instância única é solto e o app novo é aberto. O `.old` é apagado na abertura seguinte.
+- **Chave**: a pública está no código; a secreta fica no secret `MINISIGN_SECRET_KEY` do GitHub e num backup local fora do repo. `RENANMEET_UPDATE_BASE` troca só o endereço da API (testes); a chave não é configurável.
+- **Versão**: `tools/versao.py` sobe o PATCH nos dois `Cargo.toml` e no `Cargo.lock` (não há `package.json`). O workflow calcula último release + 1; a data/hora (America/Sao_Paulo) é gravada pelo `build.rs`.
+- **Release**: `release.yml` só com `workflow_dispatch`; nenhum workflow roda em PR ou push.
+- **Não provado**: o workflow nunca rodou (dispará-lo publicaria um release); o updater no Windows.

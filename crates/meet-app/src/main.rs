@@ -24,6 +24,7 @@ use meet_core::pipeline::{self, ProcessConfig, Step};
 use meet_core::voice::analyze::enroll_embedding;
 use meet_core::voice::sherpa::SherpaPaths;
 use meet_core::voice::store::VoiceStore;
+use meet_core::update::{self, Updater};
 use meet_core::{models, secrets};
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
@@ -99,6 +100,8 @@ enum Msg {
     Importing,
     Imported(Result<Meeting, String>),
     Enrolled(Result<(), String>),
+    UpdateChecked { manual: bool, res: Result<Option<update::Release>, String> },
+    UpdateReady(Result<std::path::PathBuf, String>),
 }
 
 struct Active {
@@ -130,6 +133,10 @@ struct Ctx {
     tick: u32,
     tray: Option<tray::Tray>,
     quitting: bool,
+    update: Option<update::Release>,
+    next_update_check: Instant,
+    restart_exe: Option<std::path::PathBuf>,
+    checking: bool,
 }
 
 use meet_core::export::duration_text;
@@ -473,6 +480,36 @@ impl Ctx {
         });
     }
 
+    fn update_blocked(&self) -> bool {
+        self.rec.is_some() || self.enroll.is_some() || !self.children.is_empty()
+    }
+
+    fn check_update(&mut self, manual: bool) {
+        if self.checking {
+            return;
+        }
+        self.checking = true;
+        self.next_update_check = Instant::now() + Duration::from_secs(6 * 3600);
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let res = Updater::new().latest(VERSION).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Msg::UpdateChecked { manual, res });
+        });
+    }
+
+    fn apply_update(&mut self) {
+        let Some(rel) = self.update.clone() else { return };
+        if self.update_blocked() {
+            return self.toast("Termine a gravação e o processamento antes de atualizar.");
+        }
+        self.ui().set_update_busy(true);
+        let (tx, dir) = (self.tx.clone(), data_dir().join("tmp"));
+        std::thread::spawn(move || {
+            let r = Updater::new().download(&rel, &dir).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Msg::UpdateReady(r));
+        });
+    }
+
     fn poll(&mut self) {
         self.tick += 1;
         let ui = self.ui();
@@ -508,6 +545,9 @@ impl Ctx {
                 self.finish_enroll();
             }
         }
+        if self.update.is_none() && Instant::now() >= self.next_update_check {
+            self.check_update(false);
+        }
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Msg::Importing => self.toast("Importando… (pode levar um pouco)"),
@@ -517,6 +557,45 @@ impl Ctx {
                     self.select(&m.id);
                 }
                 Msg::Imported(Err(e)) => self.toast(&format!("Importação falhou: {e}")),
+                Msg::UpdateChecked { manual, res } => {
+                    self.checking = false;
+                    match res {
+                    Ok(Some(rel)) => {
+                        ui.set_update_text(format!("Versão {} disponível (você tem {VERSION}).\n{}", rel.version, rel.notes).into());
+                        ui.set_update_available(true);
+                        self.toast(&format!("Nova versão {} disponível: veja em Ajustes.", rel.version));
+                        self.update = Some(rel);
+                    }
+                    Ok(None) => {
+                        self.update = None;
+                        ui.set_update_available(false);
+                        ui.set_update_text(format!("Versão instalada: {VERSION}.").into());
+                        if manual {
+                            self.toast("Você já está na versão mais recente.");
+                        }
+                    }
+                    Err(e) if manual => self.toast(&format!("Não consegui verificar: {e}")),
+                    Err(_) => {}
+                    }
+                }
+                Msg::UpdateReady(r) => {
+                    ui.set_update_busy(false);
+                    // gravação ou processamento podem ter começado durante o download
+                    if self.update_blocked() {
+                        if let Ok(p) = &r {
+                            let _ = std::fs::remove_file(p);
+                        }
+                        self.toast("Termine a gravação e o processamento antes de atualizar.");
+                        continue;
+                    }
+                    match r.map_err(|e| anyhow!(e)).and_then(|p| update::apply(&p)) {
+                        Ok(exe) => {
+                            self.restart_exe = Some(exe);
+                            let _ = slint::quit_event_loop();
+                        }
+                        Err(e) => self.toast(&format!("Atualização falhou: {e:#}")),
+                    }
+                }
                 Msg::Enrolled(r) => {
                     ui.set_enroll_state(match r {
                         Ok(()) => "Voz salva como “Minha voz”. Renomeie abaixo.".into(),
@@ -624,6 +703,7 @@ fn run_ui() -> Result<()> {
         eprintln!("O RenanMeet já está aberto (veja a bandeja do sistema).");
         return Ok(());
     }
+    update::cleanup_old();
     let ui = App::new()?;
     let (tx, rx) = channel();
     let ctx = Rc::new(RefCell::new(Ctx {
@@ -644,8 +724,13 @@ fn run_ui() -> Result<()> {
         tick: 0,
         tray: tray::Tray::new(),
         quitting: false,
+        update: None,
+        next_update_check: Instant::now() + Duration::from_secs(60),
+        restart_exe: None,
+        checking: false,
     }));
 
+    ui.set_update_text(format!("Versão instalada: {VERSION}.").into());
     ui.set_version(if STAMP.is_empty() { format!("v{VERSION}") } else { format!("v{VERSION} · {STAMP}") }.into());
     ui.set_lgpd_text(LGPD.into());
     {
@@ -815,6 +900,8 @@ fn run_ui() -> Result<()> {
         }
     });
     on!(on_enroll_owner, |c| c.start_enroll());
+    on!(on_check_update, |c| c.check_update(true));
+    on!(on_apply_update, |c| c.apply_update());
     on!(on_import_file, |c| {
         // o seletor de arquivo bloqueia: roda fora da thread da interface
         let tx = c.tx.clone();
@@ -857,6 +944,12 @@ fn run_ui() -> Result<()> {
     c.stop_record();
     for (_, mut ch) in c.children.drain() {
         let _ = ch.kill();
+    }
+    // atualizado: reabre já na versão nova (só depois de soltar a trava de instância única)
+    if let Some(exe) = c.restart_exe.take() {
+        drop(lock);
+        c.tray = None; // solta a bandeja e o atalho global para o processo novo assumi-los
+        Command::new(exe).spawn()?;
     }
     Ok(())
 }
