@@ -66,3 +66,16 @@ Pendente de otimização (não feito): o pico vem do carregamento do áudio inte
 **Honestidade sobre a medição**: as vozes são TTS (3 masculinas parecidas) e o ruído/reverb é sintético; fala real
 tende a ser mais variada entre pessoas, mas também mais irregular. Os números são da bancada, não de reunião real.
 Falta ainda: DER em áudio real de domínio público e reconhecimento do Renan cadastrado com a voz dele.
+
+## D5 — Transcrição, ata, banco e wiki (bloco 3)
+
+- **Groq**: STT `whisper-large-v3` (`verbose_json`, segmentos) e ata com `openai/gpt-oss-120b` em `json_object` (o `llama-3.3-70b-versatile` é desligado em 16/08/2026). Retry em 429/5xx/rede respeitando `Retry-After`; 401 falha na hora sem ecoar a chave; User-Agent próprio (a Groq dá 403 ao de biblioteca). HTTP com `ureq` (rustls), multipart montado à mão: sem tokio nem reqwest.
+- **Chave**: keyring do sistema (Secret Service no Linux, Credential Manager no Windows); `RENANMEET_GROQ_KEY` tem precedência (testes). Nunca no repo nem em argumento de linha de comando.
+- **Blocos**: ≤ 600 s, corte no ponto mais silencioso dos últimos 30 s, Opus mono 32 kb/s (~2,4 MB, longe dos 25 MB). Alucinações do Whisper (mesma frase repetida) caem para no máximo 2 repetições.
+- **Falante**: cada frase vai para o falante com mais sobreposição (mín. 0,2 s); sem sobreposição, herda o trecho de voz mais próximo (≤ 1,5 s). Transcrição (rede) e análise de voz (CPU) rodam ao mesmo tempo; a impressão de voz só é comparada às vozes salvas depois.
+- **Ata**: partes de ~14 mil caracteres, ata parcial por parte e redução em JSON; prompt trata a transcrição como dado (anti-injeção). Falha na ata não perde a transcrição.
+- **Banco**: um SQLite (`renanmeet.db`, WAL) para reuniões, trechos, falantes, ata, tarefas e vozes. Busca FTS5 (`unicode61 remove_diacritics 2`) com consulta sanitizada. Hora de Brasília como offset fixo −03:00 (sem horário de verão desde 2019).
+- **Wiki**: a nota leva só decisões e tarefas (formato da skill `/wiki`), nunca a transcrição; falha do git não perde a nota.
+- **Modelos**: baixados na primeira execução com SHA-256 fixado, `.part` e troca atômica; fora do repo. Não retoma download interrompido (reinicia).
+- **Importação**: `.opus`, `.wav`, `.m4a`, `.mp3`, `.flac` viram Opus mono 16 kHz (symphonia, Rust puro) — é o caminho do Android gravando e importando no PC.
+- **Não provado**: Groq real (sem chave no ambiente); só servidor local.

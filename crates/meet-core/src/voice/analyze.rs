@@ -92,21 +92,23 @@ pub fn analyze(paths: &SherpaPaths, pcm: &[f32], opt: &AnalyzeOptions, store: Op
         let audio = gather(&work, &ranges, 60.0);
         // trecho curto demais para tirar a impressão: o falante continua na lista, só sem nome
         let embedding = ex.embed(&audio).unwrap_or_default();
-        let found = match store {
-            Some(s) if !embedding.is_empty() => s.identify(&embedding, opt.voice_threshold)?,
-            _ => None,
-        };
-        clusters.push(ClusterInfo {
-            cluster: c,
-            seconds,
-            embedding,
-            voice_id: found.as_ref().map(|(v, _)| v.id),
-            name: found.as_ref().map(|(v, _)| v.name.clone()),
-            score: found.as_ref().map(|(_, s)| *s),
-        });
+        clusters.push(ClusterInfo { cluster: c, seconds, embedding, voice_id: None, name: None, score: None });
     }
-    unique_voices(&mut clusters);
+    if let Some(s) = store {
+        identify_clusters(&mut clusters, s, opt.voice_threshold)?;
+    }
     Ok(Analysis { spans, clusters })
+}
+
+/// Compara a impressão de cada falante com as vozes salvas e dá o nome de quem passa do limiar.
+pub fn identify_clusters(clusters: &mut [ClusterInfo], store: &VoiceStore, threshold: f32) -> Result<()> {
+    for c in clusters.iter_mut().filter(|c| !c.embedding.is_empty()) {
+        if let Some((v, score)) = store.identify(&c.embedding, threshold)? {
+            (c.voice_id, c.name, c.score) = (Some(v.id), Some(v.name), Some(score));
+        }
+    }
+    unique_voices(clusters);
+    Ok(())
 }
 
 /// Uma voz salva só pode nomear um falante da gravação: em caso de empate, fica quem tem o maior cosseno.
