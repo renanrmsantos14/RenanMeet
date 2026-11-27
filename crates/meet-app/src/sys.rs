@@ -15,7 +15,7 @@ pub fn pick_audio() -> Result<Option<PathBuf>> {
         .map_err(|_| anyhow!("instale o zenity para escolher arquivos"))?;
     #[cfg(windows)]
     let out = Command::new("powershell")
-        .args(["-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Filter='Áudio|*.opus;*.ogg;*.wav;*.m4a;*.mp3;*.flac;*.aac;*.mp4'; if($d.ShowDialog() -eq 'OK'){$d.FileName}"])
+        .args(["-NoProfile", "-Command", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Filter='Áudio|*.opus;*.ogg;*.wav;*.m4a;*.mp3;*.flac;*.aac;*.mp4'; if($d.ShowDialog() -eq 'OK'){$d.FileName}"])
         .output()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     Ok((!s.is_empty()).then(|| PathBuf::from(s)))

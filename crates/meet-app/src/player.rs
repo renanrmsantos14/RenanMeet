@@ -13,7 +13,7 @@ use meet_core::audio::decode::{load_16k, Channel, PROC_RATE};
 const BYTES_PER_SEC: u64 = PROC_RATE as u64 * 2;
 
 pub struct Player {
-    raw: Option<(PathBuf, f64)>,
+    raw: Option<PathBuf>,
     child: Option<Child>,
     started: Instant,
     offset: f64,
@@ -27,10 +27,7 @@ impl Player {
 
     /// Prepara o arquivo cru da reunião (na primeira vez que se toca).
     pub fn load(&mut self, audio: &Path, raw_path: PathBuf) -> Result<()> {
-        self.stop();
-        if self.raw.as_ref().map(|(p, _)| p) == Some(&raw_path) {
-            return Ok(());
-        }
+        self.unload();
         let pcm = load_16k(audio, Channel::Mix)?;
         let mut w = BufWriter::new(File::create(&raw_path).context("criar áudio temporário")?);
         for s in &pcm {
@@ -38,14 +35,14 @@ impl Player {
         }
         w.flush()?;
         self.duration = pcm.len() as f64 / PROC_RATE as f64;
-        self.raw = Some((raw_path, self.duration));
+        self.raw = Some(raw_path);
         self.offset = 0.0;
         Ok(())
     }
 
     pub fn unload(&mut self) {
         self.stop();
-        if let Some((p, _)) = self.raw.take() {
+        if let Some(p) = self.raw.take() {
             let _ = std::fs::remove_file(p);
         }
         self.duration = 0.0;
@@ -74,7 +71,8 @@ impl Player {
     }
 
     pub fn play_from(&mut self, secs: f64) -> Result<()> {
-        let (path, dur) = self.raw.clone().ok_or_else(|| anyhow!("áudio não carregado"))?;
+        let path = self.raw.clone().ok_or_else(|| anyhow!("áudio não carregado"))?;
+        let dur = self.duration;
         self.stop();
         let secs = if secs >= dur - 0.2 { 0.0 } else { secs.max(0.0) };
         let mut f = File::open(&path)?;

@@ -11,5 +11,4 @@ fn main() {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
     println!("cargo:rustc-env=RM_STAMP={stamp}");
-    println!("cargo:rerun-if-env-changed=RM_STAMP_FORCE");
 }

@@ -1,3 +1,4 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
 //! RenanMeet (desktop): grava, mostra a reunião e chama o processamento em outro processo,
 //! para que a RAM da análise seja devolvida ao sistema assim que ela termina.
 
@@ -55,16 +56,14 @@ fn process_headless(id: &str) -> Result<()> {
         let note = |t: &str| {
             let _ = Db::open(&db_path()).and_then(|d| d.set_setting(&progress_key(id), t));
         };
-        if !models::missing(&models_dir()).is_empty() {
-            let mut last = 0;
-            models::ensure(&models_dir(), |name, done, total| {
-                let pct = if total > 0 { done * 100 / total } else { 0 };
-                if pct != last {
-                    last = pct;
-                    note(&format!("baixando {name} {pct}%"));
-                }
-            })?;
-        }
+        let mut last = 0;
+        models::ensure(&models_dir(), |name, done, total| {
+            let pct = if total > 0 { done * 100 / total } else { 0 };
+            if pct != last {
+                last = pct;
+                note(&format!("baixando {name} {pct}%"));
+            }
+        })?;
         let mut cfg = ProcessConfig::new(key);
         if let Some(t) = db.setting("voice_threshold")?.and_then(|s| s.parse::<f32>().ok()) {
             cfg.analyze.voice_threshold = t;
@@ -97,6 +96,7 @@ struct Current {
 }
 
 enum Msg {
+    Importing,
     Imported(Result<Meeting, String>),
     Enrolled(Result<(), String>),
 }
@@ -129,21 +129,11 @@ struct Ctx {
     rx: Receiver<Msg>,
     tick: u32,
     tray: Option<tray::Tray>,
+    quitting: bool,
 }
 
-fn fmt_time(secs: f64) -> String {
-    let s = secs.max(0.0) as u64;
-    if s >= 3600 {
-        format!("{}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
-    } else {
-        format!("{:02}:{:02}", s / 60, s % 60)
-    }
-}
-
-fn duration_text(secs: f64) -> String {
-    let m = (secs / 60.0).round() as u64;
-    if m >= 60 { format!("{}h{:02}", m / 60, m % 60) } else { format!("{m} min") }
-}
+use meet_core::export::duration_text;
+use meet_core::minutes::mmss as fmt_time;
 
 fn color(i: i64) -> Color {
     let (r, g, b) = PALETTE[(i.max(0) as usize) % PALETTE.len()];
@@ -232,6 +222,11 @@ impl Ctx {
         ui.set_d_failed(failed);
         let has_audio = m.audio_path.as_deref().map(|p| std::path::Path::new(p).exists()).unwrap_or(false) && !busy;
         ui.set_has_audio(has_audio);
+        if !has_audio && self.player_id.as_deref() == Some(id) {
+            // o player some da tela (reprocessando): não deixa o áudio tocando sem controles
+            self.player.unload();
+            self.player_id = None;
+        }
         ui.set_dur(m.duration_secs as f32);
         ui.set_dur_text(fmt_time(m.duration_secs).into());
         ui.set_pos(0.0);
@@ -362,7 +357,9 @@ impl Ctx {
                 let path = meeting_dir(&a.id).join("audio.opus");
                 let _ = self.db.finish_recording(&a.id, st.seconds, &path.to_string_lossy());
                 self.toast(&format!("Gravação salva ({}).", duration_text(st.seconds)));
-                self.start_process(&a.id);
+                if !self.quitting {
+                    self.start_process(&a.id);
+                }
                 self.select(&a.id);
             }
             Err(e) => {
@@ -380,11 +377,9 @@ impl Ctx {
         if self.player_id.as_deref() != Some(&id) {
             let raw = data_dir().join("tmp");
             let _ = std::fs::create_dir_all(&raw);
-            self.ui().set_d_status("Preparando o áudio…".into());
             if let Err(e) = self.player.load(std::path::Path::new(&audio), raw.join(format!("play-{}.raw", std::process::id()))) {
                 return self.toast(&format!("Não consegui abrir o áudio: {e:#}"));
             }
-            self.ui().set_d_status("".into());
             self.player_id = Some(id);
         }
         if self.player.playing() {
@@ -464,9 +459,7 @@ impl Ctx {
         std::thread::spawn(move || {
             let r = (|| -> Result<()> {
                 e.rec.stop()?;
-                if !models::missing(&models_dir()).is_empty() {
-                    models::ensure(&models_dir(), |_, _, _| {})?;
-                }
+                models::ensure(&models_dir(), |_, _, _| {})?;
                 let pcm = load_16k(&e.path, Channel::Mix)?;
                 let _ = std::fs::remove_file(&e.path);
                 let (emb, secs) = enroll_embedding(&SherpaPaths::locate()?, &pcm)?;
@@ -517,6 +510,7 @@ impl Ctx {
         }
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
+                Msg::Importing => self.toast("Importando… (pode levar um pouco)"),
                 Msg::Imported(Ok(m)) => {
                     self.refresh_list();
                     self.start_process(&m.id);
@@ -537,13 +531,24 @@ impl Ctx {
         for id in &done {
             self.children.remove(id);
         }
+        // o processo saiu sem fechar a reunião (morto, sem memória, queda): não deixa presa em "processando"
+        for id in &done {
+            if let Ok(m) = self.db.meeting(id) {
+                if m.stage == Stage::Processing {
+                    let _ = self.db.set_stage(id, Stage::Failed, Some("o processamento foi interrompido; reprocesse"));
+                    let _ = self.db.set_setting(&progress_key(id), "");
+                }
+            }
+        }
         let selected = self.cur.as_ref().map(|c| c.meeting.id.clone());
         if !done.is_empty() || (self.tick % 4 == 0 && !self.children.is_empty()) {
             self.refresh_list();
-            if let Some(id) = selected.filter(|id| done.contains(id) || self.children.contains_key(id)) {
-                let tab_before = ui.get_tab();
-                self.load_current(&id);
-                ui.set_tab(tab_before);
+            if let Some(id) = selected {
+                if done.contains(&id) {
+                    self.load_current(&id);
+                } else if self.children.contains_key(&id) {
+                    self.ui().set_d_status(format!("Processando… {}", self.progress(&id)).into());
+                }
             }
             for id in &done {
                 if let Ok(m) = self.db.meeting(id) {
@@ -613,6 +618,12 @@ fn strings(v: &[String]) -> ModelRc<SharedString> {
 
 fn run_ui() -> Result<()> {
     std::fs::create_dir_all(data_dir())?;
+    // instância única: um segundo app resetaria as reuniões em processamento do primeiro
+    let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(data_dir().join("app.lock"))?;
+    if lock.try_lock().is_err() {
+        eprintln!("O RenanMeet já está aberto (veja a bandeja do sistema).");
+        return Ok(());
+    }
     let ui = App::new()?;
     let (tx, rx) = channel();
     let ctx = Rc::new(RefCell::new(Ctx {
@@ -632,6 +643,7 @@ fn run_ui() -> Result<()> {
         rx,
         tick: 0,
         tray: tray::Tray::new(),
+        quitting: false,
     }));
 
     ui.set_version(if STAMP.is_empty() { format!("v{VERSION}") } else { format!("v{VERSION} · {STAMP}") }.into());
@@ -694,9 +706,7 @@ fn run_ui() -> Result<()> {
             match pipeline::name_speaker(&c.db, &c.voices, &id, cl as i64, &name, remember) {
                 Ok(()) => {
                     c.ui().set_rename_cluster(-1);
-                    let tab = c.ui().get_tab();
                     c.load_current(&id);
-                    c.ui().set_tab(tab);
                 }
                 Err(e) => c.toast(&format!("{e:#}")),
             }
@@ -719,15 +729,16 @@ fn run_ui() -> Result<()> {
             if let Err(e) = c.db.save_minutes(&id, &m) {
                 return c.toast(&format!("{e:#}"));
             }
-            let tab = c.ui().get_tab();
             c.load_current(&id);
-            c.ui().set_tab(tab);
         }
     });
     on!(on_ask_delete, |c| c.ui().set_confirm_delete(true));
     on!(on_delete_meeting, |c, yes| {
         c.ui().set_confirm_delete(false);
         if let (true, Some(id)) = (yes, c.cur.as_ref().map(|x| x.meeting.id.clone())) {
+            if c.rec.as_ref().map(|a| a.id == id).unwrap_or(false) {
+                return c.toast("Pare a gravação antes de apagar esta reunião.");
+            }
             c.player.unload();
             c.player_id = None;
             if let Some(mut ch) = c.children.remove(&id) {
@@ -804,17 +815,20 @@ fn run_ui() -> Result<()> {
         }
     });
     on!(on_enroll_owner, |c| c.start_enroll());
-    on!(on_import_file, |c| match sys::pick_audio() {
-        Ok(Some(path)) => {
-            let tx = c.tx.clone();
-            c.toast("Importando… (pode levar um pouco)");
-            std::thread::spawn(move || {
+    on!(on_import_file, |c| {
+        // o seletor de arquivo bloqueia: roda fora da thread da interface
+        let tx = c.tx.clone();
+        std::thread::spawn(move || match sys::pick_audio() {
+            Ok(Some(path)) => {
+                let _ = tx.send(Msg::Importing);
                 let r = Db::open(&db_path()).and_then(|db| pipeline::import(&db, &path, "online", None, None));
                 let _ = tx.send(Msg::Imported(r.map_err(|e| format!("{e:#}"))));
-            });
-        }
-        Ok(None) => {}
-        Err(e) => c.toast(&format!("{e:#}")),
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = tx.send(Msg::Imported(Err(format!("{e:#}"))));
+            }
+        });
     });
 
     let timer = slint::Timer::default();
@@ -825,11 +839,12 @@ fn run_ui() -> Result<()> {
     // com bandeja, fechar a janela só a esconde (a gravação continua); sem bandeja, encerra
     let has_tray = ctx.borrow().tray.is_some();
     ui.window().on_close_requested(move || {
-        if has_tray { slint::CloseRequestResponse::HideWindow } else { let _ = slint::quit_event_loop(); slint::CloseRequestResponse::HideWindow }
+        if !has_tray {
+            let _ = slint::quit_event_loop();
+        }
+        slint::CloseRequestResponse::HideWindow
     });
-    if has_tray && std::env::args().any(|a| a == "--minimizado") {
-        // inicia só na bandeja
-    } else {
+    if !(has_tray && std::env::args().any(|a| a == "--minimizado")) {
         ui.show()?;
     }
     if has_tray && !ctx.borrow().tray.as_ref().map(|t| t.hotkey_ok).unwrap_or(false) {
@@ -838,6 +853,7 @@ fn run_ui() -> Result<()> {
     slint::run_event_loop_until_quit()?;
     // fechou durante a gravação: salva o que já foi gravado
     let mut c = ctx.borrow_mut();
+    c.quitting = true;
     c.stop_record();
     for (_, mut ch) in c.children.drain() {
         let _ = ch.kill();

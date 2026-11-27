@@ -136,7 +136,7 @@ export component App inherits Window {
     in-out property <string> tab: "ata";
     in property <bool> has-audio;
     in property <bool> playing;
-    in property <float> pos;
+    in-out property <float> pos;
     in property <float> dur;
     in property <string> pos-text: "00:00";
     in property <string> dur-text: "00:00";
@@ -421,7 +421,7 @@ export component App inherits Window {
                             horizontal-stretch: 1;
                             minimum: 0;
                             maximum: root.dur > 1 ? root.dur : 1;
-                            value: root.pos;
+                            value <=> root.pos;
                             released(v) => { root.seek(v); }
                         }
                         Text { text: root.dur-text; color: Theme.muted; vertical-alignment: center; width: 46px; }
@@ -533,7 +533,10 @@ export component App inherits Window {
     }
 
     // diálogo de gravação
-    if root.rec-dialog: Rectangle {
+    if root.rec-dialog: FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => { if (e.text == Key.Escape) { root.cancel-record(); accept } else { reject } }
+        Rectangle {
         background: #000000a0;
         TouchArea { clicked => { root.cancel-record(); } }
         Rectangle {
@@ -579,9 +582,13 @@ export component App inherits Window {
             }
         }
     }
+    }
 
     // confirmação de apagar
-    if root.confirm-delete: Rectangle {
+    if root.confirm-delete: FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => { if (e.text == Key.Escape) { root.delete-meeting(false); accept } else { reject } }
+        Rectangle {
         background: #000000a0;
         TouchArea { clicked => { root.delete-meeting(false); } }
         Rectangle {
@@ -605,5 +612,6 @@ export component App inherits Window {
                 }
             }
         }
+    }
     }
 }
