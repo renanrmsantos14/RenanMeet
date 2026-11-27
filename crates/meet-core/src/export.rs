@@ -16,7 +16,7 @@ pub struct Full<'a> {
     pub minutes: Option<&'a Minutes>,
 }
 
-fn duration_text(secs: f64) -> String {
+pub fn duration_text(secs: f64) -> String {
     let m = (secs / 60.0).round() as u64;
     if m >= 60 {
         format!("{}h{:02}", m / 60, m % 60)
