@@ -1,0 +1,13 @@
+[package]
+name = "proto-iced"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[workspace]
+[dependencies]
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "x11", "wayland", "thread-pool"] }
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
+panic = "abort"

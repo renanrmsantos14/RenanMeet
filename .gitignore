@@ -1,0 +1,28 @@
+# Rust
+/target/
+/.cache/
+Cargo.lock.bak
+
+# Ambiente local
+.venv/
+node_modules/
+
+# Modelos, áudio e dados locais (nunca versionar)
+/models/
+/data/
+*.gguf
+*.onnx
+*.wav
+/testdata/out/
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.log
+
+# Saída de ferramentas auxiliares
+graphify-out/
+skill-observations/
+*.status
