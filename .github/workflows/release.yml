@@ -1,0 +1,109 @@
+# Publica um release do RenanMeet. Só roda quando alguém dispara à mão (Actions → Release → Run workflow):
+# nada de PR nem push. Pré-requisito: o secret MINISIGN_SECRET_KEY (conteúdo de release.key).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      versao:
+        description: "Versão (ex.: 0.0.4). Vazio = último release + 1 no PATCH"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# duas execuções ao mesmo tempo calculariam a mesma versão
+concurrency: release
+
+jobs:
+  versao:
+    # só a main publica: uma branch poderia alterar o assinador e ler o secret
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      versao: ${{ steps.v.outputs.versao }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PEDIDA: ${{ inputs.versao }}
+        run: |
+          if [ -n "$PEDIDA" ]; then
+            v="$PEDIDA"
+          else
+            ultimo=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null || echo v0.0.0)
+            ultimo="${ultimo#v}"
+            v="${ultimo%.*}.$(( ${ultimo##*.} + 1 ))"
+          fi
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "versão inválida: $v"; exit 1; }
+          echo "versao=$v" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: versao
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin: renanmeet
+            asset: renanmeet-linux-x86_64
+          - os: windows-latest
+            bin: renanmeet.exe
+            asset: renanmeet-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependências do Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev libxdo-dev libfontconfig1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Versão
+        shell: bash
+        run: python tools/versao.py "${{ needs.versao.outputs.versao }}"
+      - name: Testes do núcleo
+        run: cargo test -p meet-core --release
+      - name: Build
+        run: cargo build --release -p meet-app
+      - name: Preparar o arquivo
+        shell: bash
+        run: cp "target/release/${{ matrix.bin }}" "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publicar:
+    needs: [versao, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Dependências do assinador
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Lista de hashes e assinatura
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          test -n "$MINISIGN_SECRET_KEY" || { echo "falta o secret MINISIGN_SECRET_KEY"; exit 1; }
+          cd dist
+          { echo "# versao ${{ needs.versao.outputs.versao }}"; sha256sum renanmeet-linux-x86_64 renanmeet-windows-x86_64.exe; } > SHA256SUMS
+          cd ..
+          cargo run --release -q -p meet-core --example chave_release -- assinar dist/SHA256SUMS
+          cargo run --release -q -p meet-core --example chave_release -- verificar dist/SHA256SUMS
+      - name: Criar o release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ needs.versao.outputs.versao }}"
+          gh release create "v$v" dist/renanmeet-linux-x86_64 dist/renanmeet-windows-x86_64.exe dist/SHA256SUMS dist/SHA256SUMS.minisig \
+            --title "RenanMeet v$v" --generate-notes --target "$GITHUB_SHA"

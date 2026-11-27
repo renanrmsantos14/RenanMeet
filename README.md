@@ -1,79 +1,57 @@
-# AtaLocal
+# RenanMeet
 
-Aplicativo Windows e Android para transcrição e ata de reuniões presenciais, **100% local**.
-Sem conta, sem assinatura, sem API paga, sem telemetria, sem envio de áudio.
+App de desktop (Linux e Windows) que grava reuniões, transcreve em português, diz quem falou e gera a ata.
+Tudo em Rust; interface em Slint; parado, usa menos de 40 MB de RAM. O trabalho pesado só roda depois da gravação.
 
-## Fluxo principal
+## Fluxo
 
-`abrir → gravar → parar → aguardar → revisar`
+`Gravar (Ctrl+Alt+R) → Parar → processa → ata, transcrição e falantes`
 
-Grava a reunião por um único microfone, transcreve em português e gera resumo com
-decisões, tarefas, responsáveis, prazos e pendências. A separação e identificação
-de vozes estão disponíveis no Windows; no Android ficam desativadas até o binding
-nativo do Sherpa ser empacotado.
+- **Captura**: microfone + áudio do sistema (online) ou só microfone (presencial, um mic para a sala toda). Opus mono.
+- **Transcrição**: Groq `whisper-large-v3`, em blocos de até 10 min.
+- **Falantes**: diarização local (Sherpa-ONNX) e voz conhecida: nomeie uma vez e o app reconhece nas próximas.
+- **Ata**: resumo, decisões, tarefas e pontos em aberto (LLM da Groq). Exporta Markdown e manda as tarefas para a wiki.
+- **Lista**: busca FTS5, player sincronizado com a transcrição, tema claro/escuro, bandeja, iniciar com o computador.
+- **LGPD**: lembrete de aviso aos participantes e botão para copiar o texto.
 
-## Stack
+A chave da Groq fica no cofre do sistema (Ajustes → Chave da Groq). Nunca vai para o repositório.
 
-| Camada | Tecnologia |
-|---|---|
-| UI | Tauri 2 + React + TypeScript + Vite |
-| Backend local | Rust |
-| Banco | SQLite (`rusqlite`) |
-| Captura de áudio | `cpal` (WASAPI/Oboe) |
-| Transcrição | `whisper.cpp` (CPU) |
-| Diarização / voz | Sherpa-ONNX |
-| Resumo | `llama.cpp` + Qwen3 4B `Q4_K_M` |
+## Instalar e atualizar
 
-Modelos são baixados sob demanda na primeira execução, com verificação de checksum
-SHA-256 e retomada de download.
+Baixe o executável da última versão em [Releases](https://github.com/renanrmsantos14/RenanMeet/releases)
+(`renanmeet-linux-x86_64` ou `renanmeet-windows-x86_64.exe`). O app consulta o GitHub 60 s depois de abrir e a cada 6 h;
+em Ajustes → Atualização há "Verificar agora" e "Atualizar e reiniciar". Só troca o executável se a assinatura minisign
+do `SHA256SUMS` bater com a chave embutida e o sha256 do arquivo conferir.
 
-## Requisitos de build (Windows x64)
-
-- Node 18+ e npm
-- Rust (rustup) — toolchain `stable-x86_64-pc-windows-msvc`
-- Visual Studio Build Tools 2022 com workload "Desenvolvimento para desktop com C++"
-- CMake (para compilar whisper.cpp / llama.cpp / sherpa-onnx)
-- WebView2 Runtime (já vem no Windows 11)
-
-## APK Android
-
-O Poco X5 Pro 5G usa a arquitetura `arm64-v8a`, que é o alvo do APK Kotlin publicado
-no GitHub Actions. O build local exige Android Studio/SDK, JDK 17, NDK e Gradle.
-O passo a passo está em [docs/android.md](docs/android.md).
-
-O APK Kotlin gerado automaticamente é um release assinado para instalação direta. Para
-Google Play, gere um AAB com a mesma chave Android de produção.
-
-## Desenvolvimento
+## Desenvolver
 
 ```bash
-npm install
-npm run tauri dev
+cargo run -p meet-app                 # app
+cargo run -p meet-core --bin meetcli  # linha de comando (importar, processar, vozes, chave)
+cargo test -p meet-core
+cargo build --release -p meet-app     # target/release/renanmeet
 ```
+
+Linux precisa de `libasound2-dev`, `libdbus-1-dev`, `libxdo-dev`, `libfontconfig1-dev`, `pkg-config`, além de `parec`/`paplay`
+(PipeWire ou PulseAudio) e `zenity`. Windows: toolchain MSVC.
 
 ## Estrutura
 
 ```
-src/            Frontend React
-src-tauri/      Backend Rust + config Tauri
-  src/
-    main.rs         Bootstrap
-    db/             SQLite: schema, migrations, repos
-    diagnostics/    CPU, RAM, disco, microfones
-    models/         Gerenciador de download de modelos
-    audio/          Captura, gravação incremental, resample
-    pipeline/       Estados de processamento e identificação de vozes
-docs/           Plano, decisões de arquitetura (ADR)
-scripts/        Utilitários de build e checksum
+crates/meet-core/   captura, voz (Sherpa), Groq, ata, banco SQLite, exportação, atualização
+crates/meet-app/    app Slint (janela, bandeja, atalho, player)
+tools/              versao.py (versão por build), testaudio/ (áudio sintético e Groq falsa)
+docs/               decisões (decisoes.md), estado da feature
+.github/workflows/  release.yml (só manual)
 ```
 
-## Estados de processamento de uma reunião
+## Versão e release
 
-`recording → finalizing → transcribing → diarizing → identifying → summarizing → completed`
-
-Mais `failed`, `cancelled`. Cada etapa é retomável sem repetir as anteriores.
+A versão é do app, não do Git: começa em `0.0.0` e cada release sobe o PATCH (`tools/versao.py bump`). O app mostra
+`v0.0.1 · dd/mm/aaaa HH:mm` no canto (hora de Brasília, gravada no build). O release sai pelo workflow **Release**
+(Actions → Run workflow; só dispara à mão) e precisa do secret `MINISIGN_SECRET_KEY`.
 
 ## Privacidade
 
-Áudio, transcrição e perfis de voz permanecem somente neste computador. O app
-funciona integralmente sem conexão de rede após os modelos serem baixados.
+O áudio fica neste computador. Só os blocos de áudio vão à Groq para transcrever, e a transcrição vai para gerar a ata.
+Sem telemetria.

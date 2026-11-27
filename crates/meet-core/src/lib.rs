@@ -11,4 +11,5 @@ pub mod secrets;
 #[cfg(test)]
 mod testserver;
 pub mod transcribe;
+pub mod update;
 pub mod voice;
