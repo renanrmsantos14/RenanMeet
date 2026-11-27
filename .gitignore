@@ -26,3 +26,6 @@ node_modules/
 graphify-out/
 skill-observations/
 *.status
+__pycache__/
+*.pyc
+.verificacao/

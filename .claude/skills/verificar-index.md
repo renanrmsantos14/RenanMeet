@@ -1,0 +1,2 @@
+- verificar-captura | crates/meet-core/src/audio/**, crates/meet-core/src/paths.rs | gravação mic + sistema, Opus, decode
+- verificar-diarizacao | crates/meet-core/src/voice/**, crates/meet-core/src/bin/meetcli.rs, tools/testaudio/** | DER, voz conhecida, tempo e RAM da análise
